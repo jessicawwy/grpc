@@ -74,6 +74,7 @@ namespace grpc_core {
 namespace {
 
 const char kUnixUriPrefix[] = "unix:";
+const char kVsockUriPrefix[] = "vsock:";
 const char kUnixAbstractUriPrefix[] = "unix-abstract:";
 
 class Chttp2ServerListener : public Server::ListenerInterface {
@@ -913,6 +914,8 @@ grpc_error_handle Chttp2ServerAddPort(Server* server, const char* addr,
                                    kUnixAbstractUriPrefix)) {
       resolved_or =
           grpc_resolve_unix_abstract_domain_address(parsed_addr_unprefixed);
+    } else if (absl::ConsumePrefix(&parsed_addr_unprefixed, kVsockUriPrefix)) {
+      resolved_or = grpc_resolve_vsock_address(parsed_addr_unprefixed);
     } else {
       resolved_or = GetDNSResolver()->ResolveNameBlocking(parsed_addr, "https");
     }

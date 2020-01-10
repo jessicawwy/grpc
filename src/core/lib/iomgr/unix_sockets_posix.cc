@@ -66,10 +66,32 @@ grpc_resolve_unix_abstract_domain_address(const absl::string_view name) {
   return result;
 }
 
+absl::StatusOr<std::vector<grpc_resolved_address>>
+grpc_resolve_vsock_address(const absl::string_view name) {
+  grpc_resolved_address addr;
+  grpc_error_handle error = grpc_core::VsockaddrPopulate(name, &addr);
+  if (error == GRPC_ERROR_NONE) {
+    return std::vector<grpc_resolved_address>({addr});
+  }
+  auto result = grpc_error_to_absl_status(error);
+  GRPC_ERROR_UNREF(error);
+  return result;
+}
+
 int grpc_is_unix_socket(const grpc_resolved_address* resolved_addr) {
   const grpc_sockaddr* addr =
       reinterpret_cast<const grpc_sockaddr*>(resolved_addr->addr);
   return addr->sa_family == AF_UNIX;
+}
+
+int grpc_is_vsock(const grpc_resolved_address* resolved_addr) {
+#ifdef GRPC_HAVE_LINUX_VSOCK
+  const grpc_sockaddr* addr =
+      reinterpret_cast<const grpc_sockaddr*>(resolved_addr->addr);
+  return addr->sa_family == AF_VSOCK;
+#else /* GRPC_HAVE_LINUX_VSOCK */
+  return 0;
+#endif /* GRPC_HAVE_LINUX_VSOCK */
 }
 
 void grpc_unlink_if_unix_domain_socket(
@@ -91,6 +113,25 @@ void grpc_unlink_if_unix_domain_socket(
   if (stat(un->sun_path, &st) == 0 && (st.st_mode & S_IFMT) == S_IFSOCK) {
     unlink(un->sun_path);
   }
+}
+
+char* grpc_sockaddr_to_uri_vsock_if_possible(
+    const grpc_resolved_address* resolved_addr) {
+#ifdef GRPC_HAVE_LINUX_VSOCK
+  const grpc_sockaddr* addr =
+      reinterpret_cast<const grpc_sockaddr*>(resolved_addr->addr);
+
+  if (addr->sa_family != AF_VSOCK) {
+      return nullptr;
+  }
+
+  char *result;
+  struct sockaddr_vm *vm = (struct sockaddr_vm*)addr;
+  gpr_asprintf(&result, "vsock:%u:%u", vm->svm_cid, vm->svm_port);
+  return result;
+#else /* GRPC_HAVE_LINUX_VSOCK */
+  return nullptr;
+#endif /* GRPC_HAVE_LINUX_VSOCK */
 }
 
 #endif

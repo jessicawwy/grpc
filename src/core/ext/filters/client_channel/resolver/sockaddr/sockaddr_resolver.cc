@@ -143,6 +143,23 @@ class IPv6ResolverFactory : public ResolverFactory {
 };
 
 #ifdef GRPC_HAVE_UNIX_SOCKET
+
+#ifdef GRPC_HAVE_LINUX_VSOCK
+class VsockResolverFactory : public ResolverFactory {
+ public:
+  bool IsValidUri(const URI& uri) const override {
+    return ParseUri(uri, grpc_parse_vsock, nullptr);
+  }
+
+  OrphanablePtr<Resolver> CreateResolver(ResolverArgs args) const override {
+    return CreateSockaddrResolver(std::move(args), grpc_parse_vsock);
+  }
+
+  absl::string_view scheme() const override { return "vsock"; }
+
+};
+#endif
+
 class UnixResolverFactory : public ResolverFactory {
  public:
   bool IsValidUri(const URI& uri) const override {
@@ -186,6 +203,10 @@ void RegisterSockaddrResolver(CoreConfiguration::Builder* builder) {
   builder->resolver_registry()->RegisterResolverFactory(
       absl::make_unique<IPv6ResolverFactory>());
 #ifdef GRPC_HAVE_UNIX_SOCKET
+#ifdef GRPC_HAVE_LINUX_VSOCK
+  builder->resolver_registry()->RegisterResolverFactory(
+      absl::make_unique<VsockResolverFactory>());
+#endif
   builder->resolver_registry()->RegisterResolverFactory(
       absl::make_unique<UnixResolverFactory>());
   builder->resolver_registry()->RegisterResolverFactory(

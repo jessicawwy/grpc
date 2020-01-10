@@ -96,8 +96,9 @@ int main(int argc, char** argv) {
       return 0;
     }
   } else {
-    target_str = "localhost:50051";
+    target_str = "vsock:3:1024";
   }
+  std::cout << "Greet " << target_str << std::endl;
   GreeterClient greeter(
       grpc::CreateChannel(target_str, grpc::InsecureChannelCredentials()));
   std::string user("world");

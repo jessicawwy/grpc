@@ -24,6 +24,10 @@
 #include <string.h>
 #ifdef GRPC_HAVE_UNIX_SOCKET
 #include <sys/un.h>
+#ifdef GRPC_HAVE_LINUX_VSOCK
+#include <sys/socket.h>
+#include <linux/vm_sockets.h>
+#endif /* GRPC_HAVE_LINUX_VSOCK */
 #endif
 #ifdef GRPC_POSIX_SOCKET
 #include <errno.h>
@@ -117,6 +121,59 @@ grpc_error_handle UnixAbstractSockaddrPopulate(
   return GRPC_ERROR_NONE;
 }
 
+#if defined(GRPC_HAVE_LINUX_VSOCK)
+grpc_error_handle VsockaddrPopulate(absl::string_view cidport,
+                                    grpc_resolved_address* resolved_addr) {
+
+  gpr_log(GPR_DEBUG, "cidport = %s",std::string(cidport).c_str());
+
+  memset(resolved_addr, 0, sizeof(*resolved_addr));
+  struct sockaddr_vm* svm = reinterpret_cast<struct sockaddr_vm*>(resolved_addr->addr);
+
+  svm->svm_family = AF_VSOCK;
+
+  // Split cid and port.
+  std::string cid;
+  std::string port;
+  size_t colon = cidport.find(':');
+
+  if (colon != absl::string_view::npos && cidport.find(':', colon + 1) == absl::string_view::npos) {
+    /* Exactly 1 colon.  Split into cid:port. */
+    cid = std::string(cidport.substr(0, colon));
+    port = std::string(cidport.substr(colon + 1, cidport.size() - colon - 1));
+  } else {
+    return GRPC_ERROR_CREATE_FROM_CPP_STRING(absl::StrCat(
+        "Failed gpr_split_cid_port ", std::string(cidport).c_str()));
+  }
+
+
+  // Parse port.
+  if (cid.empty() || port.empty()) {
+    return GRPC_ERROR_CREATE_FROM_CPP_STRING(absl::StrCat(
+        "Failed gpr_split_cid_port ", std::string(cidport).c_str()));
+  }
+
+  int cid_num;
+  int port_num;
+  if (sscanf(cid.c_str(), "%d", &cid_num) != 1) {
+    return GRPC_ERROR_CREATE_FROM_CPP_STRING(absl::StrCat(
+        "invalid cid: ", std::string(cidport).c_str()));
+  }
+
+  if (sscanf(port.c_str(), "%d", &port_num) != 1 || port_num < 0 || port_num > 65535) {
+    return GRPC_ERROR_CREATE_FROM_CPP_STRING(absl::StrCat(
+        "invalid port: ", std::string(cidport).c_str()));
+  }
+
+  svm->svm_cid = cid_num;
+  svm->svm_port = port_num;
+  resolved_addr->len = static_cast<socklen_t>(sizeof(*svm));
+
+  gpr_log(GPR_DEBUG, "cid = %d, port = %d",svm->svm_cid, svm->svm_port);
+  return GRPC_ERROR_NONE;
+}
+#endif
+
 }  // namespace grpc_core
 
 #else  /* GRPC_HAVE_UNIX_SOCKET */
@@ -143,8 +200,39 @@ grpc_error_handle UnixAbstractSockaddrPopulate(
   abort();
 }
 
+grpc_error_handle VsockaddrPopulate(
+    absl::string_view /* path */, grpc_resolved_address* /* resolved_addr */) {
+  abort()
+}
+
 }  // namespace grpc_core
 #endif /* GRPC_HAVE_UNIX_SOCKET */
+
+#if defined(GRPC_HAVE_UNIX_SOCKET) && defined(GRPC_HAVE_LINUX_VSOCK)
+bool grpc_parse_vsock(const grpc_core::URI& uri,
+                      grpc_resolved_address* resolved_addr) {
+  if (uri.scheme() != "vsock") {
+    gpr_log(GPR_ERROR, "Expected 'vsock' scheme, got '%s'", uri.scheme().c_str());
+    return false;
+  }
+
+  grpc_error_handle error = grpc_core::VsockaddrPopulate(uri.path(), resolved_addr);
+  if (error != GRPC_ERROR_NONE) {
+    gpr_log(GPR_ERROR, "%s", grpc_error_std_string(error).c_str());
+    GRPC_ERROR_UNREF(error);
+    return false;
+  }
+  return true;
+}
+
+#else /* defined(GRPC_HAVE_UNIX_SOCKET) && defined(GRPC_HAVE_LINUX_VSOCK) */
+
+bool grpc_parse_vsock(const grpc_core::URI&,
+                      grpc_resolved_address* resolved_addr) {
+  abort();
+}
+
+#endif /* defined(GRPC_HAVE_UNIX_SOCKET) && defined(GRPC_HAVE_LINUX_VSOCK) */
 
 bool grpc_parse_ipv4_hostport(absl::string_view hostport,
                               grpc_resolved_address* addr, bool log_errors) {
@@ -306,6 +394,9 @@ bool grpc_parse_uri(const grpc_core::URI& uri,
   }
   if (uri.scheme() == "ipv6") {
     return grpc_parse_ipv6(uri, resolved_addr);
+  }
+  if (uri.scheme() == "vsock") {
+    return grpc_parse_vsock(uri, resolved_addr);
   }
   gpr_log(GPR_ERROR, "Can't parse scheme '%s'", uri.scheme().c_str());
   return false;
